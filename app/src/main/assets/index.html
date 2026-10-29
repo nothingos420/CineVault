@@ -209,6 +209,8 @@
                     <option value="default">Default Category Order</option>
                     <option value="title-asc">Title (A-Z)</option>
                     <option value="title-desc">Title (Z-A)</option>
+                    <option value="rating-desc">Rating (High-Low)</option>
+                    <option value="rating-asc">Rating (Low-High)</option>
                 </select>
             </div>
         </div>
@@ -285,7 +287,7 @@
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-gray-300 mb-1">Initial Status</label>
+                    <label class="block text-xs font-semibold text-gray-300 mb-1">Status</label>
                     <div class="flex items-center gap-4 pt-1">
                         <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
                             <input type="radio" name="statusRadio" value="want" checked class="text-brand-600 focus:ring-brand-500">
@@ -324,6 +326,9 @@
                     <label class="block text-xs font-semibold text-gray-300 mb-1">Poster Image URL</label>
                     <input type="url" id="imageUrlInput" placeholder="https://example.com/poster.jpg" class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-xl text-sm text-gray-100 placeholder-gray-500 focus:ring-2 focus:ring-brand-500 focus:outline-none">
                     <p class="text-[11px] text-gray-500 mt-1">Paste a direct image link from IMDb, Google Images, or TMDB.</p>
+                    <button type="button" id="fetchSinglePosterBtn" class="mt-2 w-full px-3 py-2 rounded-xl text-xs font-semibold bg-gray-800 hover:bg-gray-700 text-amber-400 border border-gray-700 flex items-center justify-center gap-2 transition-all disabled:opacity-50">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> <span id="fetchSinglePosterLabel">Fetch poster from TMDB</span>
+                    </button>
                 </div>
 
                 <div id="imagePreviewContainer" class="hidden">
@@ -1202,10 +1207,19 @@
         const customMovies = JSON.parse(localStorage.getItem('movie_dashboard_custom_movies') || '[]');
         const storedImageUrls = JSON.parse(localStorage.getItem('movie_dashboard_image_urls') || '{}');
         const storedTmdbApiKey = localStorage.getItem('tmdb_api_key') || '';
+        const storedOverrides = JSON.parse(localStorage.getItem('movie_dashboard_overrides') || '{}');
+        const storedDeleted = JSON.parse(localStorage.getItem('movie_dashboard_deleted') || '[]');
+        const storedRatings = JSON.parse(localStorage.getItem('movie_dashboard_ratings') || '{}');
+        const baseMovies = MOVIES_DATA
+            .filter(m => !storedDeleted.includes(m.id))
+            .map(m => storedOverrides[m.id] ? { ...m, ...storedOverrides[m.id] } : m);
 
         // App State
         let state = {
-            movies: [...MOVIES_DATA, ...customMovies],
+            movies: [...baseMovies, ...customMovies],
+            overrides: storedOverrides,
+            deletedIds: new Set(storedDeleted),
+            ratings: storedRatings,
             watchedIds: new Set(JSON.parse(localStorage.getItem('watched_movies') || '[]')),
             imageUrls: storedImageUrls,
             tmdbApiKey: storedTmdbApiKey,
@@ -1329,6 +1343,8 @@
             }).sort((a, b) => {
                 if (state.sortBy === 'title-asc') return a.title.localeCompare(b.title);
                 if (state.sortBy === 'title-desc') return b.title.localeCompare(a.title);
+                if (state.sortBy === 'rating-desc') return (state.ratings[b.id] || 0) - (state.ratings[a.id] || 0);
+                if (state.sortBy === 'rating-asc') return (state.ratings[a.id] || 0) - (state.ratings[b.id] || 0);
                 return 0; // Default order
             });
         }
@@ -1349,6 +1365,7 @@
             moviesGrid.innerHTML = filtered.map(movie => {
                 const isWatched = state.watchedIds.has(movie.id);
                 const imageUrl = state.imageUrls[movie.title] || state.imageUrls[movie.id];
+                const rating = state.ratings[movie.id] || 0;
 
                 return `
                     <div class="glass-card rounded-xl overflow-hidden flex flex-col justify-between group hover:border-brand-500/50 transition-all relative">
@@ -1386,15 +1403,20 @@
                                                 <i class="fa-solid fa-image text-xs"></i>
                                             </button>
                                         ` : ''}
-                                        ${movie.isCustom ? `
-                                            <button 
-                                                onclick="deleteMovie(${movie.id})" 
-                                                class="w-7 h-7 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all"
-                                                title="Delete Custom Movie"
-                                            >
-                                                <i class="fa-solid fa-trash text-xs"></i>
-                                            </button>
-                                        ` : ''}
+                                        <button
+                                            onclick="openEditModal(${movie.id})"
+                                            class="w-7 h-7 rounded-lg border border-gray-700 bg-gray-800 text-gray-400 hover:text-brand-400 hover:border-brand-500/40 flex items-center justify-center transition-all"
+                                            title="Edit Movie"
+                                        >
+                                            <i class="fa-solid fa-pen-to-square text-xs"></i>
+                                        </button>
+                                        <button
+                                            onclick="deleteMovie(${movie.id})"
+                                            class="w-7 h-7 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all"
+                                            title="Delete Movie"
+                                        >
+                                            <i class="fa-solid fa-trash text-xs"></i>
+                                        </button>
                                         <button 
                                             onclick="toggleWatched(${movie.id})"
                                             class="w-7 h-7 rounded-lg border flex items-center justify-center transition-all ${isWatched ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-gray-800 text-gray-500 border-gray-700 hover:text-gray-300'}"
@@ -1409,6 +1431,13 @@
                                     ${movie.title}
                                 </h3>
                                 <p class="text-xs text-gray-400 line-clamp-2">${movie.note || 'No notes added'}</p>
+                                <div class="flex items-center mt-2 -ml-1" title="Rate this movie">
+                                    ${[1, 2, 3, 4, 5].map(n => `
+                                        <button onclick="setRating(${movie.id}, ${n})" class="px-1 py-1 text-base leading-none transition-colors ${n <= rating ? 'text-amber-400' : 'text-gray-600 hover:text-amber-300'}" title="${n} star${n > 1 ? 's' : ''}">
+                                            <i class="fa-${n <= rating ? 'solid' : 'regular'} fa-star"></i>
+                                        </button>
+                                    `).join('')}
+                                </div>
                             </div>
 
                             <div class="mt-4 pt-3 border-t border-gray-800/60 flex items-center justify-between text-[11px]">
@@ -1512,6 +1541,40 @@
             renderMovies();
         });
 
+        // Fetch a poster for just this one movie (inside the poster modal)
+        document.getElementById('fetchSinglePosterBtn').addEventListener('click', async () => {
+            const id = parseInt(imageMovieIdInput.value, 10);
+            const movie = state.movies.find(m => m.id === id);
+            if (!movie) return;
+
+            const key = (state.tmdbApiKey || tmdbApiKeyInput.value).trim();
+            if (!key) {
+                alert('Add your TMDB API key first (TMDB API Settings at the top of the page).');
+                return;
+            }
+
+            const btn = document.getElementById('fetchSinglePosterBtn');
+            const label = document.getElementById('fetchSinglePosterLabel');
+            btn.disabled = true;
+            label.textContent = 'Searching TMDB...';
+            try {
+                const url = await findTmdbPoster(movie.title, key);
+                if (url) {
+                    imageUrlInput.value = url;
+                    imageUrlInput.dispatchEvent(new Event('input'));
+                } else {
+                    alert('No poster found on TMDB for this title.');
+                }
+            } catch (err) {
+                alert(err.message === 'INVALID_KEY'
+                    ? 'Invalid TMDB API key. Please check it in TMDB API Settings.'
+                    : 'Could not reach TMDB. Check your connection and try again.');
+            } finally {
+                btn.disabled = false;
+                label.textContent = 'Fetch poster from TMDB';
+            }
+        });
+
         // TMDB Poster API Logic ⭐
         
         function extractCleanTitleAndYear(rawTitle) {
@@ -1528,6 +1591,29 @@
                 .trim();
 
             return { cleanTitle, year };
+        }
+
+        // Finds a poster URL for one title. Throws Error('INVALID_KEY') on a bad key.
+        async function findTmdbPoster(title, key) {
+            const { cleanTitle, year } = extractCleanTitleAndYear(title);
+            const base = `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(key)}&include_adult=false`;
+            const queries = [];
+            if (year) queries.push(`${base}&query=${encodeURIComponent(cleanTitle)}&primary_release_year=${year}`);
+            queries.push(`${base}&query=${encodeURIComponent(cleanTitle)}`);
+            if (cleanTitle !== title) {
+                queries.push(`${base}&query=${encodeURIComponent(title.replace(/\(.*?\)/g, '').trim())}`);
+            }
+
+            for (const url of queries) {
+                const res = await fetch(url);
+                if (res.status === 401) throw new Error('INVALID_KEY');
+                if (!res.ok) continue;
+                const data = await res.json();
+                if (data.results && data.results.length > 0 && data.results[0].poster_path) {
+                    return `https://image.tmdb.org/t/p/w500${data.results[0].poster_path}`;
+                }
+            }
+            return null;
         }
 
         async function fetchTmdbPosters() {
@@ -1560,54 +1646,16 @@
                 tmdbCurrentMovieText.textContent = `[${i + 1}/${total}] TMDB Search: "${cleanTitle}"${year ? ' (' + year + ')' : ''}`;
 
                 try {
-                    let fullPosterUrl = null;
-
-                    // Attempt 1: Clean Title + Release Year
-                    if (year) {
-                        const urlWithYear = `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(key)}&query=${encodeURIComponent(cleanTitle)}&primary_release_year=${year}&include_adult=false`;
-                        const res1 = await fetch(urlWithYear);
-                        if (res1.status === 401) {
-                            alert('Invalid TMDB API key. Please check your key and try again.');
-                            break;
-                        }
-                        if (res1.ok) {
-                            const data1 = await res1.json();
-                            if (data1.results && data1.results.length > 0 && data1.results[0].poster_path) {
-                                fullPosterUrl = `https://image.tmdb.org/t/p/w500${data1.results[0].poster_path}`;
-                            }
-                        }
-                    }
-
-                    // Attempt 2: Clean Title without year constraint
-                    if (!fullPosterUrl) {
-                        const urlTitleOnly = `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(key)}&query=${encodeURIComponent(cleanTitle)}&include_adult=false`;
-                        const res2 = await fetch(urlTitleOnly);
-                        if (res2.ok) {
-                            const data2 = await res2.json();
-                            if (data2.results && data2.results.length > 0 && data2.results[0].poster_path) {
-                                fullPosterUrl = `https://image.tmdb.org/t/p/w500${data2.results[0].poster_path}`;
-                            }
-                        }
-                    }
-
-                    // Attempt 3: Raw Title Fallback
-                    if (!fullPosterUrl && cleanTitle !== movie.title) {
-                        const rawQuery = movie.title.replace(/\(.*?\)/g, '').trim();
-                        const urlRaw = `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(key)}&query=${encodeURIComponent(rawQuery)}&include_adult=false`;
-                        const res3 = await fetch(urlRaw);
-                        if (res3.ok) {
-                            const data3 = await res3.json();
-                            if (data3.results && data3.results.length > 0 && data3.results[0].poster_path) {
-                                fullPosterUrl = `https://image.tmdb.org/t/p/w500${data3.results[0].poster_path}`;
-                            }
-                        }
-                    }
-
+                    const fullPosterUrl = await findTmdbPoster(movie.title, key);
                     if (fullPosterUrl) {
                         state.imageUrls[movie.title] = fullPosterUrl;
                         successCount++;
                     }
                 } catch (err) {
+                    if (err.message === 'INVALID_KEY') {
+                        alert('Invalid TMDB API key. Please check your key and try again.');
+                        break;
+                    }
                     console.warn(`Failed to fetch poster for ${cleanTitle}:`, err);
                 }
 
@@ -1641,20 +1689,75 @@
             renderMovies();
         }
 
-        // Delete Custom Movie
-        function deleteMovie(id) {
-            state.movies = state.movies.filter(m => m.id !== id);
-            state.watchedIds.delete(id);
-            delete state.imageUrls[id];
-
-            const customOnly = state.movies.filter(m => m.isCustom);
-            localStorage.setItem('movie_dashboard_custom_movies', JSON.stringify(customOnly));
+        // Save everything related to movies
+        function saveMovieData() {
+            localStorage.setItem('movie_dashboard_custom_movies', JSON.stringify(state.movies.filter(m => m.isCustom)));
+            localStorage.setItem('movie_dashboard_overrides', JSON.stringify(state.overrides));
+            localStorage.setItem('movie_dashboard_deleted', JSON.stringify([...state.deletedIds]));
             localStorage.setItem('watched_movies', JSON.stringify([...state.watchedIds]));
             localStorage.setItem('movie_dashboard_image_urls', JSON.stringify(state.imageUrls));
+            localStorage.setItem('movie_dashboard_ratings', JSON.stringify(state.ratings));
+        }
 
+        function ensureActiveCategoryExists() {
+            if (state.activeCategory !== 'All' && !state.movies.some(m => m.cat === state.activeCategory)) {
+                state.activeCategory = 'All';
+                activeCategoryTitle.textContent = 'All Movies';
+                resetCategoryBtn.classList.add('hidden');
+            }
+        }
+
+        // Star Rating (tap the same star again to clear)
+        function setRating(id, n) {
+            if (state.ratings[id] === n) {
+                delete state.ratings[id];
+            } else {
+                state.ratings[id] = n;
+            }
+            localStorage.setItem('movie_dashboard_ratings', JSON.stringify(state.ratings));
+            renderMovies();
+        }
+
+        // Delete any movie (built-in or custom)
+        function deleteMovie(id) {
+            const movie = state.movies.find(m => m.id === id);
+            if (!movie) return;
+            if (!confirm(`Delete "${movie.title}"? This can't be undone.`)) return;
+
+            state.movies = state.movies.filter(m => m.id !== id);
+            state.watchedIds.delete(id);
+            delete state.ratings[id];
+            delete state.imageUrls[id];
+            if (!state.movies.some(m => m.title === movie.title)) {
+                delete state.imageUrls[movie.title];
+            }
+            if (!movie.isCustom) {
+                state.deletedIds.add(id);
+                delete state.overrides[id];
+            }
+
+            saveMovieData();
+            ensureActiveCategoryExists();
             renderCategories();
             renderMovies();
             updateCounters();
+        }
+
+        // Edit any movie (built-in or custom)
+        function openEditModal(id) {
+            const movie = state.movies.find(m => m.id === id);
+            if (!movie) return;
+
+            movieForm.reset();
+            movieIdInput.value = movie.id;
+            modalTitle.innerHTML = `<i class="fa-solid fa-pen text-brand-500"></i> Edit Movie`;
+            movieTitleInput.value = movie.title;
+            movieCatSelect.value = movie.cat;
+            customCatContainer.classList.add('hidden');
+            customCatInput.value = '';
+            movieNoteInput.value = movie.note;
+            document.querySelector(`input[name="statusRadio"][value="${state.watchedIds.has(id) ? 'watched' : 'want'}"]`).checked = true;
+            movieModal.classList.remove('hidden');
         }
 
         // Modal Logic
@@ -1684,26 +1787,49 @@
             const note = movieNoteInput.value.trim();
             const status = document.querySelector('input[name="statusRadio"]:checked').value;
 
-            const newId = Date.now();
-            const newMovie = {
-                id: newId,
-                title,
-                cat: category,
-                note: note || 'Custom Added',
-                isCustom: true
-            };
+            const editId = movieIdInput.value ? parseInt(movieIdInput.value, 10) : null;
 
-            state.movies.push(newMovie);
+            if (editId) {
+                const movie = state.movies.find(m => m.id === editId);
+                if (movie) {
+                    const oldTitle = movie.title;
+                    movie.title = title;
+                    movie.cat = category;
+                    movie.note = note;
 
-            if (status === 'watched') {
-                state.watchedIds.add(newId);
+                    // Keep the poster when the title is renamed
+                    if (oldTitle !== title && state.imageUrls[oldTitle]) {
+                        if (!state.imageUrls[title]) state.imageUrls[title] = state.imageUrls[oldTitle];
+                        if (!state.movies.some(m => m.title === oldTitle)) delete state.imageUrls[oldTitle];
+                    }
+
+                    if (!movie.isCustom) {
+                        state.overrides[editId] = { title, cat: category, note };
+                    }
+
+                    if (status === 'watched') {
+                        state.watchedIds.add(editId);
+                    } else {
+                        state.watchedIds.delete(editId);
+                    }
+                }
+            } else {
+                const newId = Date.now();
+                state.movies.push({
+                    id: newId,
+                    title,
+                    cat: category,
+                    note: note || 'Custom Added',
+                    isCustom: true
+                });
+                if (status === 'watched') {
+                    state.watchedIds.add(newId);
+                }
             }
 
-            const customOnly = state.movies.filter(m => m.isCustom);
-            localStorage.setItem('movie_dashboard_custom_movies', JSON.stringify(customOnly));
-            localStorage.setItem('watched_movies', JSON.stringify([...state.watchedIds]));
-
+            saveMovieData();
             closeModal();
+            ensureActiveCategoryExists();
             renderCategories();
             renderMovies();
             updateCounters();
